@@ -10,9 +10,22 @@
 		9243BBB72F92155700A58C57 /* AccidentAssistant.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AccidentAssistant.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		92FBC4D12FAC6A20008B9ACF /* Exceptions for "AccidentAssistant" folder in "AccidentAssistant" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 9243BBB62F92155700A58C57 /* AccidentAssistant */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		9243BBB92F92155700A58C57 /* AccidentAssistant */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				92FBC4D12FAC6A20008B9ACF /* Exceptions for "AccidentAssistant" folder in "AccidentAssistant" target */,
+			);
 			path = AccidentAssistant;
 			sourceTree = "<group>";
 		};
@@ -127,6 +140,8 @@
 /* Begin XCBuildConfiguration section */
 		9243BBC02F92155800A58C57 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 9243BBB92F92155700A58C57 /* AccidentAssistant */;
+			baseConfigurationReferenceRelativePath = Secrets.xcconfig;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -190,6 +205,8 @@
 		};
 		9243BBC12F92155800A58C57 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 9243BBB92F92155700A58C57 /* AccidentAssistant */;
+			baseConfigurationReferenceRelativePath = Secrets.xcconfig;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -251,19 +268,28 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = P7682BQ2Z7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AccidentAssistant/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Accident Assistant needs access to the camera to take scene photos, scan driver documents, and record video evidence.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Accident Assistant needs background location to accurately record crash telemetry.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Accident Assistant needs your location to record vehicle speed during a collision.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Accident Assistant needs access to the microphone to record audio context during video evidence capture.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Needed to detect driving state for battery efficiency.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.accidentassistant.AccidentAssistant;
+				PRODUCT_BUNDLE_IDENTIFIER = com.AA.AccidentAssistant;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -282,19 +308,28 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = P7682BQ2Z7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AccidentAssistant/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Accident Assistant needs access to the camera to take scene photos, scan driver documents, and record video evidence.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Accident Assistant needs background location to accurately record crash telemetry.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Accident Assistant needs your location to record vehicle speed during a collision.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Accident Assistant needs access to the microphone to record audio context during video evidence capture.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Needed to detect driving state for battery efficiency.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.accidentassistant.AccidentAssistant;
+				PRODUCT_BUNDLE_IDENTIFIER = com.AA.AccidentAssistant;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
