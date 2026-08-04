@@ -137,6 +137,25 @@ class AccidentStore: ObservableObject {
         return decoded
     }
 
+    // MARK: - Public API — Delete
+
+    /// Permanently deletes an incident: removes its manifest entry and its
+    /// entire on-disk folder (photos, videos, metadata, AI reconstruction, telemetry).
+    func deleteReport(for id: UUID) {
+        var manifest = loadManifest()
+        manifest.summaries.removeAll { $0.id == id }
+        saveManifest(manifest)
+
+        let folder = incidentFolderURL(for: id)
+        guard FileManager.default.fileExists(atPath: folder.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: folder)
+            print("🗑️ Deleted incident: \(id.uuidString)")
+        } catch {
+            print("💾 deleteReport failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Public API — Create
 
     func createNewAccident(date: Date = Date()) {
@@ -155,9 +174,10 @@ class AccidentStore: ObservableObject {
             // Write an empty detail record so metadata.json always exists.
             saveReport(AccidentReport(id: id))
 
-            // Append a lightweight summary to the global index.
+            // Append a lightweight summary to the global index. Starts as "draft" — the Wizard
+            // hasn't been completed yet, so this accident can be resumed or safely discarded.
             var manifest = loadManifest()
-            manifest.summaries.append(AccidentSummary(id: id, date: date, status: "active"))
+            manifest.summaries.append(AccidentSummary(id: id, date: date, status: "draft"))
             saveManifest(manifest)
 
             currentReportFolderURL = folder
@@ -173,12 +193,31 @@ class AccidentStore: ObservableObject {
         }
     }
 
+    /// Marks a draft accident as fully completed — called once the Wizard's summary step has
+    /// actually been saved, so it stops showing up as a resumable "Draft" on the Home Screen.
+    func finalizeAccident(for id: UUID) {
+        var manifest = loadManifest()
+        guard let index = manifest.summaries.firstIndex(where: { $0.id == id }) else {
+            print("💾 finalizeAccident: could not find accident \(id.uuidString) in manifest.")
+            return
+        }
+        manifest.summaries[index].status = "active"
+        saveManifest(manifest)
+        print("✅ Finalized accident: \(id.uuidString)")
+    }
+
     // MARK: - Public API — Images
 
-    func saveImage(_ image: UIImage) {
+    /// Saves a photo to the active incident's driverupload folder. When `fileName` is provided
+    /// (e.g. an AI-generated, timestamp-prefixed label), it's sanitized and used as the file's
+    /// base name instead of the default `evidence_N` scheme; a numeric suffix is appended on
+    /// collision so no existing file is ever silently overwritten. Returns the URL the photo was
+    /// written to (nil on failure) so callers can later rename that exact file in place.
+    @discardableResult
+    func saveImage(_ image: UIImage, fileName: String? = nil) -> URL? {
         guard let accidentID = currentAccidentID else {
             print("💾 No active accident ID — run createNewAccident() first.")
-            return
+            return nil
         }
 
         let fileManager = FileManager.default
@@ -191,15 +230,22 @@ class AccidentStore: ObservableObject {
             var manifest = loadManifest()
             guard let index = manifest.summaries.firstIndex(where: { $0.id == accidentID }) else {
                 print("💾 saveImage: could not find active accident in manifest.")
-                return
+                return nil
             }
 
             let nextIndex = manifest.summaries[index].photoCount + 1
-            let fileURL   = driverUploadURL.appendingPathComponent("evidence_\(nextIndex).jpg")
+            let baseName  = sanitizedFileName(fileName, fallback: "evidence_\(nextIndex)")
+
+            var fileURL = driverUploadURL.appendingPathComponent("\(baseName).jpg")
+            var duplicateSuffix = 2
+            while fileManager.fileExists(atPath: fileURL.path) {
+                fileURL = driverUploadURL.appendingPathComponent("\(baseName)_\(duplicateSuffix).jpg")
+                duplicateSuffix += 1
+            }
 
             guard let jpegData = image.jpegData(compressionQuality: 0.8) else {
                 print("💾 Could not convert UIImage to JPEG bytes.")
-                return
+                return nil
             }
 
             try jpegData.write(to: fileURL, options: [.atomic])
@@ -209,13 +255,33 @@ class AccidentStore: ObservableObject {
 
             currentReportFolderURL = incidentFolderURL(for: accidentID)
             print("📁 Saved to: \(fileURL.path) and updated manifest.")
+            return fileURL
         } catch {
             print("💾 saveImage failed: \(error.localizedDescription)")
+            return nil
         }
+    }
+
+    /// Strips characters that are unsafe in a file name, keeping alphanumerics, underscores,
+    /// and hyphens. Falls back to `fallback` if `name` is nil, blank, or empty after cleaning.
+    private func sanitizedFileName(_ name: String?, fallback: String) -> String {
+        guard let name, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return fallback }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-"))
+        let cleaned = String(String.UnicodeScalarView(name.unicodeScalars.filter { allowed.contains($0) }))
+        return cleaned.isEmpty ? fallback : cleaned
     }
 
     /// Loads every JPEG in the driverupload folder for an incident.
     func getImages(for incidentID: UUID) -> [UIImage] {
+        getImageURLs(for: incidentID).compactMap { url in
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return UIImage(data: data)
+        }
+    }
+
+    /// Returns the URLs of every JPEG in the driverupload folder for an incident, sorted by filename.
+    /// Unlike `getImages`, this keeps the file identity around so a specific photo can be deleted later.
+    func getImageURLs(for incidentID: UUID) -> [URL] {
         let fileManager  = FileManager.default
         let driverUpload = incidentFolderURL(for: incidentID)
             .appendingPathComponent("driverupload", isDirectory: true)
@@ -231,14 +297,44 @@ class AccidentStore: ObservableObject {
             return urls
                 .filter { $0.pathExtension.lowercased() == "jpg" || $0.pathExtension.lowercased() == "jpeg" }
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
-                .compactMap { url in
-                    guard let data = try? Data(contentsOf: url) else { return nil }
-                    return UIImage(data: data)
-                }
         } catch {
-            print("💾 getImages failed: \(error.localizedDescription)")
+            print("💾 getImageURLs failed: \(error.localizedDescription)")
             return []
         }
+    }
+
+    /// Renames a photo file in the driverupload folder, preserving its original extension.
+    /// Returns true on success.
+    @discardableResult
+    func renamePhoto(at currentURL: URL, to newName: String) -> Bool {
+        let ext = currentURL.pathExtension
+        let sanitised = newName.hasSuffix(".\(ext)") ? newName : newName + ".\(ext)"
+        let destination = currentURL.deletingLastPathComponent().appendingPathComponent(sanitised)
+        do {
+            try FileManager.default.moveItem(at: currentURL, to: destination)
+            print("✏️ Renamed to: \(sanitised)")
+            return true
+        } catch {
+            print("💾 renamePhoto failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Deletes the photo file at the exact URL provided and keeps the manifest's
+    /// `photoCount` for `reportID` in sync with what's actually left on disk.
+    func deleteImage(at url: URL, for reportID: UUID) {
+        do {
+            try FileManager.default.removeItem(at: url)
+            print("🗑️ Photo removed: \(url.lastPathComponent)")
+        } catch {
+            print("💾 deleteImage failed: \(error.localizedDescription)")
+            return
+        }
+
+        var manifest = loadManifest()
+        guard let index = manifest.summaries.firstIndex(where: { $0.id == reportID }) else { return }
+        manifest.summaries[index].photoCount = getImageURLs(for: reportID).count
+        saveManifest(manifest)
     }
 
     // MARK: - Public API — Video
@@ -247,23 +343,42 @@ class AccidentStore: ObservableObject {
         incidentFolderURL(for: id).appendingPathComponent("dashcam", isDirectory: true)
     }
 
-    /// Copies the video at `tempURL` into the incident's dashcam folder.
-    /// Filename: yyyy-MM-dd_clip_N.mp4 where N is one more than the current clip count.
-    func saveVideo(from tempURL: URL, for reportID: UUID) {
+    /// Copies the video at `tempURL` into the incident's dashcam folder. When `fileName` is
+    /// provided (e.g. a preserved library file name), it's sanitized and used as-is; otherwise
+    /// falls back to the default `yyyy-MM-dd_clip_N.mp4` scheme. A numeric suffix is appended on
+    /// collision so no existing file is ever silently overwritten. Returns the URL the video was
+    /// written to (nil on failure).
+    @discardableResult
+    func saveVideo(from tempURL: URL, for reportID: UUID, fileName: String? = nil) -> URL? {
         let fileManager = FileManager.default
         let dashcam = dashcamFolderURL(for: reportID)
         do {
             try fileManager.createDirectory(at: dashcam, withIntermediateDirectories: true)
-            let existingCount = (try? fileManager.contentsOfDirectory(
-                at: dashcam, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
-            ))?.filter { $0.pathExtension.lowercased() == "mp4" }.count ?? 0
-            let dateString = DateFormatter.fileSafeDate.string(from: Date())
-            let filename = "\(dateString)_clip_\(existingCount + 1).mp4"
-            let destination = dashcam.appendingPathComponent(filename)
+
+            let baseName: String
+            if let fileName {
+                baseName = sanitizedFileName(fileName, fallback: "clip")
+            } else {
+                let existingCount = (try? fileManager.contentsOfDirectory(
+                    at: dashcam, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+                ))?.filter { $0.pathExtension.lowercased() == "mp4" }.count ?? 0
+                let dateString = DateFormatter.fileSafeDate.string(from: Date())
+                baseName = "\(dateString)_clip_\(existingCount + 1)"
+            }
+
+            var destination = dashcam.appendingPathComponent("\(baseName).mp4")
+            var duplicateSuffix = 2
+            while fileManager.fileExists(atPath: destination.path) {
+                destination = dashcam.appendingPathComponent("\(baseName)_\(duplicateSuffix).mp4")
+                duplicateSuffix += 1
+            }
+
             try fileManager.copyItem(at: tempURL, to: destination)
-            print("🎥 Video saved: \(filename)")
+            print("🎥 Video saved: \(destination.lastPathComponent)")
+            return destination
         } catch {
             print("💾 saveVideo failed: \(error.localizedDescription)")
+            return nil
         }
     }
 

@@ -287,6 +287,32 @@ private struct GeminiCandidate: Decodable, Sendable {
         )
     }
 
+    /// Sends a single image with a plain-text instruction and returns the raw text response.
+    /// Used for lightweight, single-shot tasks (e.g. generating a short auto-name label)
+    /// rather than the full multimodal accident-report pipeline.
+    public func generateLabel(
+        for image: UIImage,
+        prompt: String,
+        model: GeminiModel = .efficient
+    ) async throws -> String {
+        let apiKey = try resolvedAPIKey()
+        let url = try endpoint(for: model, apiKey: apiKey)
+
+        guard let base64 = try await processImages([image]).first else {
+            throw GeminiError.imageProcessingFailed(index: 0)
+        }
+
+        let parts: [GeminiPart] = [
+            GeminiPart(text: prompt),
+            GeminiPart(mimeType: "image/jpeg", base64Data: base64)
+        ]
+        let body = GeminiRequest(contents: [GeminiContent(parts: parts)])
+        let encoded = try JSONEncoder().encode(body)
+
+        let responseData = try await performRequest(with: encoded, url: url, timeout: model.requestTimeout)
+        return try parseResponse(responseData)
+    }
+
     // MARK: - Key Resolution
 
     private func resolvedAPIKey() throws -> String {

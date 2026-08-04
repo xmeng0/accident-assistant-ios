@@ -17,6 +17,8 @@ final class EvidenceGalleryViewModel: ObservableObject {
         let dateText: String
         let photoCount: Int
         let icon: String
+        /// "draft" while the Wizard hasn't been completed yet, "active" once it has.
+        let status: String
     }
 
     @Published var reports: [ReportDisplayData] = []
@@ -36,7 +38,8 @@ final class EvidenceGalleryViewModel: ObservableObject {
                 title: "Incident Report",
                 dateText: formatter.string(from: incident.date),
                 photoCount: incident.photoCount,
-                icon: "folder.fill"
+                icon: "folder.fill",
+                status: incident.status
             )
         }
 
@@ -46,6 +49,13 @@ final class EvidenceGalleryViewModel: ObservableObject {
             let rightDate = incidentsByID[rhs.id]?.date ?? .distantPast
             return leftDate > rightDate
         }
+    }
+
+    /// Deletes the incident from persistent storage and removes it from the
+    /// published list so the UI updates immediately (e.g. after a swipe-to-delete).
+    func deleteReport(id: UUID) {
+        AccidentStore.shared.deleteReport(for: id)
+        reports.removeAll { $0.id == id }
     }
 }
 

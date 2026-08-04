@@ -11,6 +11,10 @@ import MapKit
 import PhotosUI
 
 struct AccidentWizardView: View {
+    /// When set, the Wizard resumes this existing draft accident instead of starting a fresh
+    /// one — its already-saved photos (and telemetry) are picked back up rather than lost.
+    var resumeID: UUID? = nil
+
     enum Step: Int, CaseIterable {
         case safety    = 1
         case location  = 2
@@ -64,11 +68,23 @@ struct AccidentWizardView: View {
 
     @State private var currentStep: Step = .safety
     @State private var showCamera = false
-    /// Temporary bridge: receives from ImagePicker then is appended to capturedImages.
+    /// Temporary bridge: receives from ImagePicker then is saved immediately via `addCapturedPhoto`.
     @State private var cameraImage: UIImage?
-    @State private var capturedImages: [UIImage] = []
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var incidentDate: Date = Date()
+
+    /// The draft accident created as soon as the user takes their first photo in this Wizard
+    /// session — nil until then. Photos are saved directly to it (mirroring the Evidence Tab)
+    /// instead of being held in memory and flushed at the end.
+    @State private var wizardAccidentID: UUID? = nil
+    @State private var loadedImageURLs: [URL] = []
+    /// Set right before the Wizard dismisses via a successful save, so `discardDraftIfNeeded()`
+    /// knows not to delete the draft the user just finished.
+    @State private var didCompleteWizard = false
+    /// True when this session picked up an existing draft via `resumeID` — cancelling out of a
+    /// resumed session should leave the draft (and its photos) exactly as they already were,
+    /// not discard it, since it was intentionally saved for later.
+    @State private var isResumingDraft = false
 
     // Step 5 — Other Driver's Insurance
     @State private var insuranceProvider: String = ""
@@ -142,6 +158,7 @@ struct AccidentWizardView: View {
                         if currentStep.rawValue > 1 {
                             currentStep = Step(rawValue: currentStep.rawValue - 1) ?? .safety
                         } else {
+                            discardDraftIfNeeded()
                             dismiss()
                         }
                     } label: {
@@ -159,6 +176,7 @@ struct AccidentWizardView: View {
 
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        discardDraftIfNeeded()
                         dismiss()
                     } label: {
                         Image(systemName: "xmark")
@@ -184,17 +202,16 @@ struct AccidentWizardView: View {
             }
             .onChange(of: cameraImage) { _, newImage in
                 guard let newImage else { return }
-                capturedImages.append(newImage)
+                addCapturedPhoto(newImage)
             }
             .onChange(of: selectedPhotoItems) { _, newItems in
+                guard !newItems.isEmpty else { return }
+                let items = newItems
+                selectedPhotoItems = []
                 Task {
-                    for item in newItems {
-                        if let data = try? await item.loadTransferable(type: Data.self),
-                           let image = UIImage(data: data) {
-                            capturedImages.append(image)
-                        }
+                    for item in items {
+                        await addLibraryPhoto(item)
                     }
-                    selectedPhotoItems = []
                 }
             }
             .sheet(isPresented: $showOCRScanner) {
@@ -231,6 +248,26 @@ struct AccidentWizardView: View {
                 Text("For best results, capture the photo in a well-lit area and avoid glare on the card.")
             }
         }
+        .onAppear { resumeDraftIfNeeded() }
+        .onChange(of: incidentLocation) { _, newLocation in
+            // As soon as a GPS fix or manual address resolves, the draft is guaranteed to exist
+            // on disk — so it survives even if the user closes the Wizard before adding photos.
+            guard newLocation != nil else { return }
+            ensureAccidentCreated()
+        }
+    }
+
+    /// Picks a resumed draft's accident ID back up, points the store at it, and reloads
+    /// whatever photos (and telemetry) were already saved to it in an earlier session —
+    /// jumping straight to the Photos step since that's the only state we can restore.
+    private func resumeDraftIfNeeded() {
+        guard let resumeID, wizardAccidentID == nil else { return }
+        isResumingDraft = true
+        wizardAccidentID = resumeID
+        AccidentStore.shared.currentAccidentID = resumeID
+        AccidentStore.shared.currentReportFolderURL = AccidentStore.shared.incidentFolderURL(for: resumeID)
+        refreshLoadedImageURLs()
+        currentStep = .photos
     }
 
     /// Extracted from `body` so the compiler doesn't have to type-check the
@@ -252,6 +289,69 @@ struct AccidentWizardView: View {
             photosStepContent
                 .padding(.top, 4)
         }
+    }
+
+    /// Live camera capture: creates the draft accident on first use, then immediately saves
+    /// `image` to disk under a fallback timestamp name and refreshes the on-screen thumbnail
+    /// strip. The AI-descriptive rename happens in the background (fire-and-forget) and never
+    /// blocks the UI.
+    private func addCapturedPhoto(_ image: UIImage) {
+        ensureAccidentCreated()
+        PhotoAutoNamer.saveAndAutoName(image) { _ in
+            refreshLoadedImageURLs()
+        } onRenamed: {
+            refreshLoadedImageURLs()
+        }
+    }
+
+    /// Library upload: creates the draft accident on first use, then saves the picked photo
+    /// immediately with no AI naming — preserving its own original file name when meaningful,
+    /// otherwise falling back to a "Library_" + creation-timestamp name.
+    private func addLibraryPhoto(_ item: PhotosPickerItem) async {
+        guard let imageFile = try? await item.loadTransferable(type: ImageFile.self),
+              let image = UIImage(contentsOfFile: imageFile.url.path) else { return }
+
+        ensureAccidentCreated()
+        let originalName = imageFile.url.deletingPathExtension().lastPathComponent
+        let creationDate = LibraryMediaNamer.creationDate(fromImageAt: imageFile.url)
+        let fileName = LibraryMediaNamer.displayName(originalNameNoExtension: originalName, creationDate: creationDate)
+
+        AccidentStore.shared.saveImage(image, fileName: fileName)
+        refreshLoadedImageURLs()
+    }
+
+    /// Lazily creates the draft accident record the first time a photo needs to be saved,
+    /// so the Wizard can persist evidence as it's captured instead of only at the final step.
+    private func ensureAccidentCreated() {
+        guard wizardAccidentID == nil else { return }
+        AccidentStore.shared.createNewAccident(date: incidentDate)
+        wizardAccidentID = AccidentStore.shared.currentAccidentID
+    }
+
+    private func refreshLoadedImageURLs() {
+        guard let id = wizardAccidentID else { return }
+        loadedImageURLs = AccidentStore.shared.getImageURLs(for: id)
+    }
+
+    /// Called when the user explicitly cancels out of the Wizard (the "X" button, or "Back" on
+    /// the first step) instead of completing it. Acts as a strict gatekeeper: the draft is only
+    /// ever deleted when the wizard is completely empty — it was NOT resumed from an existing
+    /// draft/telemetry attachment (`resumeID == nil`), no location was resolved, and no photos
+    /// were added. If the user attached telemetry, entered a location, or took a photo, the
+    /// draft is left exactly as-is so it can be safely resumed later from the "Draft" card.
+    private func discardDraftIfNeeded() {
+        guard let id = wizardAccidentID,
+              resumeID == nil,
+              incidentLocation == nil,
+              loadedImageURLs.isEmpty
+        else { return }
+
+        AccidentStore.shared.deleteReport(for: id)
+        if AccidentStore.shared.currentAccidentID == id {
+            AccidentStore.shared.currentAccidentID = nil
+            AccidentStore.shared.currentReportFolderURL = nil
+        }
+        wizardAccidentID = nil
     }
 
     @MainActor
@@ -339,7 +439,7 @@ struct AccidentWizardView: View {
                 Button {
                     #if targetEnvironment(simulator)
                     let mock = UIImage(systemName: "photo.on.rectangle.angled") ?? UIImage()
-                    capturedImages.append(mock)
+                    addCapturedPhoto(mock)
                     #else
                     showCamera = true
                     #endif
@@ -364,7 +464,7 @@ struct AccidentWizardView: View {
                 Button {
                     currentStep = .insurance
                 } label: {
-                    Text(capturedImages.isEmpty ? "Skip Photos" : "Continue")
+                    Text(loadedImageURLs.isEmpty ? "Skip Photos" : "Continue")
                         .wizardButtonLabel()
                 }
                 .wizardPrimaryButton(background: safetyRed)
@@ -386,8 +486,17 @@ struct AccidentWizardView: View {
                             issueDate:        issueDate,
                             expirationDate:   expirationDate
                         ),
-                        capturedImages: capturedImages,
-                        onSaved: { dismiss() }
+                        existingAccidentID: wizardAccidentID,
+                        onSaved: {
+                            // `currentAccidentID` is guaranteed correct here even if photos were
+                            // skipped entirely (FNOLSummaryView creates the accident itself in
+                            // that case) — fall back to it so the right draft always gets locked in.
+                            if let finalID = wizardAccidentID ?? AccidentStore.shared.currentAccidentID {
+                                AccidentStore.shared.finalizeAccident(for: finalID)
+                            }
+                            didCompleteWizard = true
+                            dismiss()
+                        }
                     )
                 } label: {
                     Text(currentStep.primaryActionTitle)
@@ -528,7 +637,7 @@ struct AccidentWizardView: View {
 
     private var photosStepContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if capturedImages.isEmpty {
+            if loadedImageURLs.isEmpty {
                 HStack(spacing: 12) {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .fill(Color(.tertiarySystemFill))
@@ -554,28 +663,48 @@ struct AccidentWizardView: View {
                     Spacer(minLength: 0)
                 }
             } else {
-                Text("\(capturedImages.count) photo\(capturedImages.count == 1 ? "" : "s") captured")
+                Text("\(loadedImageURLs.count) photo\(loadedImageURLs.count == 1 ? "" : "s") captured")
                     .font(.system(.subheadline, design: .rounded).weight(.semibold))
                     .foregroundStyle(.secondary)
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
-                        ForEach(Array(capturedImages.enumerated()), id: \.offset) { _, image in
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 100, height: 100)
-                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                        .strokeBorder(Color(.separator).opacity(0.25), lineWidth: 1)
-                                )
+                        ForEach(loadedImageURLs, id: \.self) { url in
+                            VStack(spacing: 4) {
+                                wizardPhotoThumbnail(for: url)
+
+                                Text(url.deletingPathExtension().lastPathComponent)
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .frame(width: 100)
+                            }
                         }
                     }
                     .padding(.horizontal, 2)
                 }
             }
         }
+    }
+
+    /// Loads a captured photo straight from disk for the Photos-step thumbnail strip.
+    private func wizardPhotoThumbnail(for url: URL) -> some View {
+        Group {
+            if let uiImage = UIImage(contentsOfFile: url.path) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color(.tertiarySystemFill)
+            }
+        }
+        .frame(width: 100, height: 100)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color(.separator).opacity(0.25), lineWidth: 1)
+        )
     }
 
     // MARK: - Insurance step UI
@@ -601,19 +730,19 @@ struct AccidentWizardView: View {
             .wizardPrimaryButton(background: Color(.secondaryLabel))
 
             VStack(spacing: 0) {
-                insuranceField("Provider",       text: $insuranceProvider, icon: "building.2")
+                insuranceField("Provider",       placeholder: "e.g., State Farm",      text: $insuranceProvider, icon: "building.2")
                 Divider().padding(.leading, 44)
-                insuranceField("Policy Number",  text: $policyNumber,      icon: "number")
+                insuranceField("Policy Number",  placeholder: "e.g., 123456789",        text: $policyNumber,      icon: "number")
                 Divider().padding(.leading, 44)
-                insuranceField("Driver Name",    text: $otherDriverName,   icon: "person")
+                insuranceField("Driver Name",    placeholder: "First and Last Name",    text: $otherDriverName,   icon: "person")
                 Divider().padding(.leading, 44)
-                insuranceField("License Number", text: $licenseNumber,     icon: "creditcard")
+                insuranceField("License Number", placeholder: "e.g., 12345678",         text: $licenseNumber,     icon: "creditcard")
                 Divider().padding(.leading, 44)
-                insuranceField("Date of Birth",    text: $dateOfBirth,    icon: "calendar")
+                insuranceField("Date of Birth",    placeholder: "MM/DD/YYYY", text: $dateOfBirth,    icon: "calendar")
                 Divider().padding(.leading, 44)
-                insuranceField("Issue Date",       text: $issueDate,      icon: "calendar.badge.plus")
+                insuranceField("Issue Date",       placeholder: "MM/DD/YYYY", text: $issueDate,      icon: "calendar.badge.plus")
                 Divider().padding(.leading, 44)
-                insuranceField("Expiration Date",  text: $expirationDate, icon: "calendar.badge.exclamationmark")
+                insuranceField("Expiration Date",  placeholder: "MM/DD/YYYY", text: $expirationDate, icon: "calendar.badge.exclamationmark")
             }
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -632,7 +761,8 @@ struct AccidentWizardView: View {
     /// Shows a persistent caption above the field so the label stays visible
     /// even after the user (or a DL scan) fills in a value — the icon and
     /// TextField placeholder alone aren't enough once the field is non-empty.
-    private func insuranceField(_ label: String, text: Binding<String>, icon: String) -> some View {
+    /// `placeholder` shows a format hint (e.g. "e.g., State Farm") instead of repeating `label`.
+    private func insuranceField(_ label: String, placeholder: String, text: Binding<String>, icon: String) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 16, weight: .semibold))
@@ -643,7 +773,7 @@ struct AccidentWizardView: View {
                 Text(label)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                TextField(label, text: text)
+                TextField(placeholder, text: text)
                     .font(.system(.body, design: .rounded))
                     .autocorrectionDisabled()
             }

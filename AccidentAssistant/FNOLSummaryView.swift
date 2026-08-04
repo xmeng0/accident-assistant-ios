@@ -12,8 +12,10 @@ struct FNOLSummaryView: View {
     // Mutable so the description TextField can write back through $report.
     @State var report: IncidentReport
 
-    /// Photos held in memory by the wizard — flushed to disk on save.
-    var capturedImages: [UIImage] = []
+    /// The draft accident the Wizard already created (and saved photos into directly) as soon
+    /// as the user captured their first photo. If nil (the user skipped the Photos step
+    /// entirely), a new accident is created here instead.
+    var existingAccidentID: UUID? = nil
 
     /// Called after a successful save — typically the wizard's dismiss action,
     /// which pops the fullScreenCover and returns the user to the Home Screen.
@@ -90,17 +92,21 @@ struct FNOLSummaryView: View {
     // MARK: - Actions
 
     private func saveAndReturn() {
-        AccidentStore.shared.createNewAccident(date: report.date)
-
-        for image in capturedImages {
-            AccidentStore.shared.saveImage(image)
+        let id: UUID
+        if let existingAccidentID {
+            // Photos were already saved directly to this accident as they were captured.
+            id = existingAccidentID
+        } else {
+            // The user skipped the Photos step entirely — nothing exists on disk yet.
+            AccidentStore.shared.createNewAccident(date: report.date)
+            guard let newID = AccidentStore.shared.currentAccidentID else {
+                print("💾 FNOLSummaryView: no active accident ID after creation.")
+                onSaved?()
+                return
+            }
+            id = newID
         }
 
-        guard let id = AccidentStore.shared.currentAccidentID else {
-            print("💾 FNOLSummaryView: no active accident ID after creation.")
-            onSaved?()
-            return
-        }
         AccidentStore.shared.updateIncidentDetails(
             for: id,
             provider:            report.insuranceCompany,
