@@ -38,7 +38,7 @@ struct ImageFile: Transferable {
     }
 }
 
-enum LibraryMediaNamer {
+nonisolated enum LibraryMediaNamer {
     /// Matches the PHPicker-style UUID iOS tacks onto the end of a transferred file's name —
     /// with or without a leading separator — e.g. the trailing chunk of
     /// "TestclipforAAapp-02DBEA56-50A4-408D-8C72-9B660AB7FD99" or a name that's nothing
