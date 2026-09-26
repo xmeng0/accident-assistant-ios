@@ -1,1 +1,10 @@
 **/Secrets.xcconfig
+
+# Xcode per-user state
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# macOS
+.DS_Store
