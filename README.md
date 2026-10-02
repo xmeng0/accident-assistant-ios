@@ -18,8 +18,9 @@ Accident Assistant is a native iOS app that turns a panicked, error-prone moment
 3. [Tech Stack & Architecture](#tech-stack--architecture)
 4. [Getting Started (Developer Setup)](#getting-started-developer-setup)
 5. [Testing Crash Detection: the "Couch Test"](#testing-crash-detection-the-couch-test)
-6. [Roadmap](#roadmap)
-7. [Known Limitations](#known-limitations)
+6. [What Data Is Sent to the AI](#what-data-is-sent-to-the-ai)
+7. [Roadmap](#roadmap)
+8. [Known Limitations](#known-limitations)
 
 ---
 
@@ -91,8 +92,8 @@ Accident Assistant replaces a blank form with a **guided, one-decision-per-scree
 
 - A two-tab incident view. **Summary** is the paperwork view. **Evidence** is a media gallery with multi-select, rename, delete, full-screen preview, and an editable Other Driver card.
 - **Dashcam and scene video:** record in the app or import from the library. Imported files keep their original names and capture dates.
-- **AI photo auto-naming:** camera captures are saved right away under a timestamp name. A background task then asks Gemini for a short descriptive label and renames the file, so the UI never waits on the network.
-- **Multimodal FNOL reconstruction** with Google Gemini, combining telemetry, photos, video, location, crash time, and the driver's own description. It returns strict JSON with a summary, a pre-impact/impact/post-impact timeline, visual damage, environmental factors, and liability *indicators*. The driver chooses **Standard (Fast)** or **Forensic (Deep)** mode.
+- **AI photo auto-naming:** camera captures are saved right away under a timestamp name. A background task then sends that photo to Gemini for a short descriptive label and renames the file, so the UI never waits on the network.
+- **Multimodal FNOL reconstruction** with Google Gemini, built from the incident's photos, videos, and telemetry snapshot (see [What Data Is Sent to the AI](#what-data-is-sent-to-the-ai)). It returns strict JSON with a summary, a pre-impact/impact/post-impact timeline, visual damage, environmental factors, and liability *indicators*. The driver chooses **Standard (Fast)** or **Forensic (Deep)** mode.
 - **Cost guard:** the app refuses to call the model when there is no evidence to analyse.
 - **Resilient networking:** exponential backoff on HTTP 429 and 503, typed errors, and longer timeouts for requests that include video.
 
@@ -169,7 +170,7 @@ flowchart LR
 2. **Consent.** The driver taps *Start New Report*, sees the impact time, and chooses whether to attach the data. A `draft` incident folder is created and `telemetry.json` is written into it.
 3. **Capture.** The wizard saves each photo, location, and scanned document field to disk as it is collected. If the app is closed or the phone dies, the draft is still there.
 4. **Finalize.** Finishing the wizard changes the status from `draft` to `active` in `manifest.json`.
-5. **Reconstruct.** In the Summary tab, `GeminiService` combines telemetry, media, location, and the driver's description into a JSON reconstruction, which is saved as `reconstruction.txt`.
+5. **Reconstruct.** In the Summary tab, `GeminiService` sends the incident's telemetry, photos, and videos to Gemini and receives a JSON reconstruction, which is saved as `reconstruction.txt`.
 6. **Deliver.** `ReportPDFGenerator` renders the FNOL PDF, and the share sheet sends it to the insurer or fleet manager.
 
 ### Project structure
@@ -317,6 +318,45 @@ Available in **Debug** builds on a **physical iPhone**:
 
 ---
 
+## What Data Is Sent to the AI
+
+The app calls Google's Gemini API in exactly two situations. Everything else, including document scanning, runs on the device.
+
+### 1. AI reconstruction (when the driver taps *Generate AI Reconstruction*)
+
+| Sent to Gemini | Details |
+|---|---|
+| **Scene photos** | Every photo saved in the incident, from the camera or the library. Each is downscaled to a maximum of 1600 px and re-encoded as JPEG. |
+| **Videos** | Every dashcam or scene video saved in the incident, sent in full. |
+| **Telemetry snapshot** | The pre-impact buffer, if one was attached: up to 15 one-second entries, each with a time offset (`T-14s … T-00s`), speed in mph, and an event label (`normal` or `IMPACT`). |
+| **Instructions** | A fixed prompt telling the model to state only what the evidence shows, to write "Unknown" otherwise, and not to assign fault. |
+
+The reconstruction is generated **only from those inputs**: what is visible in the photos and videos, plus the speed timeline.
+
+**Not sent, although the app stores them:**
+
+- The driver's written description of the incident
+- The incident location and the crash date and time
+- The other driver's name, licence number, date of birth, insurer, and policy number
+- The licence and insurance-card images used for scanning (these are never saved as evidence)
+- The reporting driver's own profile (name, fleet ID, insurer)
+
+The request has fields for location, crash time, and the driver's description, but the app currently fills them with "Unknown" / "Not provided". Passing the real values is on the roadmap. Raw G-force readings are not recorded; an impact appears only as the `IMPACT` label on the final entry.
+
+If the incident has no photos, no videos, and no telemetry, the app does not call the API at all.
+
+### 2. Photo auto-naming (automatic, on each camera capture)
+
+When the driver takes a photo **with the in-app camera**, that single photo (downscaled as above) is sent to Gemini in the background with a short prompt asking for a descriptive file name. This happens without a separate confirmation. Photos imported from the library are not sent for naming.
+
+### What comes back and where it goes
+
+- The reconstruction is returned as JSON (summary, timeline, visual damage, environmental factors, liability indicators) and saved on the device as `reconstruction.txt` in the incident folder.
+- Photo labels are used only to rename the file on the device.
+- The app has no backend of its own. Requests go directly from the phone to Google, authenticated with the API key bundled in the app.
+
+---
+
 ## Roadmap
 
 Development was run in themed sprints, each aimed at one user outcome.
@@ -331,7 +371,8 @@ Development was run in themed sprints, each aimed at one user outcome.
 
 **Next up**
 
-- **PII sanitization:** redact license and policy numbers before any data is sent to the model.
+- **Richer AI context:** pass the driver's description, location, and crash time into the reconstruction request, and record peak G-force in the telemetry.
+- **Consent and PII safeguards:** ask before any photo is sent to the model (including auto-naming), and blur faces and number plates.
 - **Server-side AI proxy:** move the Gemini key out of the app bundle and add authentication and rate limiting.
 - **Large-video pipeline:** upload files with resumable transfers instead of inline base64, and extract keyframes.
 - **Direct submission:** secure links or integrations for fleet-management and claims systems.
@@ -344,7 +385,8 @@ Development was run in themed sprints, each aimed at one user outcome.
 This is a working prototype built as a portfolio piece. These trade-offs were made deliberately and are listed openly:
 
 - **API key on the client.** The Gemini key is bundled with the app for prototyping. A production release would send requests through a backend.
-- **Evidence leaves the device during AI reconstruction.** Photos, video, and telemetry are sent to Google's Gemini API when the driver taps *Generate*. OCR does not upload anything.
+- **Evidence leaves the device for AI features.** Photos, videos, and telemetry are sent to Google's Gemini API when the driver taps *Generate*, and each in-app camera photo is sent for auto-naming as it is taken. Photos can show faces and number plates, and there is no consent screen yet. OCR does not upload anything.
+- **The AI reconstruction does not yet use the driver's description, location, or crash time.** See [What Data Is Sent to the AI](#what-data-is-sent-to-the-ai).
 - **Crash threshold is a single heuristic** (2.5 G net), tuned for demos rather than validated against real crash data.
 - **Crash detection runs while the app is running or in the background**, not after the user force-quits it. The re-arm notification reduces this gap but cannot remove it.
 - **Not a substitute for emergency services or legal advice.** The AI output is a draft for the driver to review before sending.
